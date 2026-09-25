@@ -25,11 +25,18 @@ let panoW = 0;      // drawn panorama width
 let panoH = 0;      // drawn panorama height
 let panoY = 0;      // vertical offset (letterboxing on tall screens)
 
-// hawk (design units, same numbers as the original sketch)
-let flightSpeedX = 1;
-let flightSpeedY = 0.2;
-let birdX = 0;
-let birdY = 0;
+// hawk — soars back and forth on a smooth looping path. It slows into each
+// turn, rolls over to face the new direction, and tilts with its climb/dive.
+const HAWK_FACES_RIGHT = false; // set to false if hawk.png is drawn facing left
+const HAWK_PASS_SECONDS = 9;   // time to cross from one side to the other
+const HAWK_DRIFT_SECONDS = 23; // slow up-and-down drift (different rhythm = varied path)
+const HAWK_MAX_TILT = 0.35;    // most the nose tips up or down, in radians (~20°)
+const HAWK_TURN_LIFT = 18;     // how far it rises as it swings through a turn (design units)
+const HAWK_FLIP = 0.5;         // how quickly it flips in a turn: lower = faster (0.05–0.5)
+
+let flightPhaseX = Math.PI / 2; // start mid-pass, flying right
+let flightPhaseY = 0;
+let hawkTilt = 0;               // smoothed tilt so the nose moves gently
 
 // loading state
 let revealStart = null;   // when the fade-in began
@@ -129,13 +136,38 @@ function draw() {
 }
 
 function flying() {
-  // Frame-rate independent: 120Hz iPads/phones won't fly twice as fast
-  const dt = deltaTime / (1000 / 60);
+  // Frame-rate independent, and capped so a background tab doesn't jump
+  const dtSec = min(deltaTime, 100) / 1000;
+  flightPhaseX += (PI / HAWK_PASS_SECONDS) * dtSec;
+  flightPhaseY += (TWO_PI / HAWK_DRIFT_SECONDS) * dtSec;
 
-  const rotationAngle = map(birdX, -280, 280, -0.4, 0.3);
+  // Path in design units, same area as the original sketch:
+  // x swings between -300 and 220, y between -150 and 0 (up is negative).
+  // A sine wave slows down smoothly at each end instead of bouncing.
+  // facing: +1 flying right, -1 flying left, passing through 0 in a turn.
+  const facing = Math.sin(flightPhaseX); // follows the x velocity
+  const birdX = -40 - 260 * Math.cos(flightPhaseX);
+  const turnAmount = 1 - abs(facing); // 0 mid-pass, 1 at the very top of a turn
+  const birdY = -75 + 75 * Math.sin(flightPhaseY) - HAWK_TURN_LIFT * turnAmount;
 
-  // Original flight path spans birdX -300..220 around screen x ≈ 225.
-  // Center it on the screen and shrink the span if the screen is narrow.
+  // Screen-space velocity, for how steeply it climbs or dives
+  const vx = 260 * facing * (PI / HAWK_PASS_SECONDS);
+  const vy =
+    75 * Math.cos(flightPhaseY) * (TWO_PI / HAWK_DRIFT_SECONDS) +
+    HAWK_TURN_LIFT * Math.sign(facing) * Math.cos(flightPhaseX) * (PI / HAWK_PASS_SECONDS);
+  // Nose follows the climb/dive, measured along the direction it's heading.
+  // Use a minimum forward speed so it doesn't point straight up in a turn.
+  let targetTilt = Math.atan2(vy, max(abs(vx), 60));
+  targetTilt = constrain(targetTilt, -HAWK_MAX_TILT, HAWK_MAX_TILT);
+  hawkTilt = lerp(hawkTilt, targetTilt, 1 - Math.pow(0.02, dtSec)); // gentle smoothing
+
+  // Roll over during the turn: the image narrows to edge-on and widens again
+  // mirrored. The curve keeps it at full width for most of the pass and only
+  // narrows near the turn.
+  const roll = Math.sign(facing) * Math.pow(abs(facing), HAWK_FLIP);
+  const dir = HAWK_FACES_RIGHT ? 1 : -1;
+
+  // Original flight path is centered on the screen and shrinks on narrow screens
   const halfSpan = 260;
   const spanScale = min(s, (width * 0.42) / halfSpan);
   const cx = width / 2 + (birdX + 40) * spanScale;
@@ -148,20 +180,14 @@ function flying() {
 
   push();
   translate(cx, cy);
-  rotate(rotationAngle);
+  // Screen y points down, so climbing (vy < 0) tips the nose up:
+  // counter-clockwise when heading right, clockwise when heading left.
+  // Multiplying by roll makes the tilt flip smoothly through the turn.
+  rotate(hawkTilt * roll);
+  scale(roll * dir, 1);
   imageMode(CENTER);
   image(bird, 0, 0, bw, bh);
   pop();
-
-  birdX += flightSpeedX * dt;
-  birdY -= flightSpeedY * dt;
-  if (birdX < -300 || birdX > 220) {
-    birdX = constrain(birdX, -300, 220); // avoid getting stuck past the edge
-    flightSpeedX *= -1;
-    if (birdY < -150 || birdY > 0) {
-      flightSpeedY *= -1;
-    }
-  }
 }
 
 // p5 2.x uses pointer events: these fire for mouse, touch, and Apple Pencil,
